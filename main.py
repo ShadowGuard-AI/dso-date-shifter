@@ -112,6 +112,8 @@ def process_file(file_path, shift_days, output_path, date_format):
 
         # Write the processed content to the output file
         if output_path:
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
             output_file_path = os.path.join(output_path, os.path.basename(file_path))
         else:
             output_file_path = file_path # Overwrite input file
