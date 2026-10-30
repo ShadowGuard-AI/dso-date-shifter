@@ -3,9 +3,9 @@ import os
 import re
 import random
 import logging
+import sys
 import datetime
 import chardet
-from faker import Faker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -99,16 +99,13 @@ def process_file(file_path, shift_days, output_path, date_format):
         with open(file_path, 'r', encoding=encoding) as f:
             content = f.read()
 
-        # Find all dates matching the specified format
+        # Find all dates matching the specified format and shift them in
+        # one substitution pass. The old loop replaced one date string at
+        # a time over the whole text, so a shifted date that landed on
+        # another date present in the file was shifted a second time when
+        # that date's turn came: distinct dates collapsed onto one day.
         date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}|\d{2}[/-]\d{2}[/-]\d{4}|\d{2}[/-]\d{2}[/-]\d{2}') # Matches YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY and similar
-        dates = re.findall(date_pattern, content)
-
-
-        # Shift the dates and replace them in the content
-        shifted_content = content
-        for date_str in dates:
-            shifted_date = shift_date(date_str, shift_days, date_format)
-            shifted_content = shifted_content.replace(date_str, shifted_date)
+        shifted_content = date_pattern.sub(lambda m: shift_date(m.group(0), shift_days, date_format), content)
 
         # Write the processed content to the output file
         if output_path:
@@ -147,7 +144,13 @@ def process_directory(input_path, shift_days, output_path, recursive, date_forma
             file_path = os.path.join(root, file)
             if not recursive and root != input_path:
                 continue # Skip files in subdirectories if not recursive
-            process_file(file_path, shift_days, output_path, date_format)
+            # Keep each subdirectory's files in the matching output
+            # subdirectory. Writing by basename alone made two files with
+            # the same name in different folders overwrite each other.
+            target_dir = output_path
+            if output_path and root != input_path:
+                target_dir = os.path.join(output_path, os.path.relpath(root, input_path))
+            process_file(file_path, shift_days, target_dir, date_format)
         if not recursive:
             break  # Only process the top-level directory
 
@@ -167,7 +170,7 @@ def main():
     # Input validation
     if not os.path.exists(input_path):
         logging.error(f"Input path does not exist: {input_path}")
-        return
+        sys.exit(1)
 
     if shift_days is None:
         shift_days = random.randint(-365, 365) # Random shift if not specified
@@ -181,6 +184,7 @@ def main():
         process_directory(input_path, shift_days, output_path, recursive, date_format)
     else:
         logging.error(f"Invalid input path: {input_path}. Must be a file or directory.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
