@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # dso-date-shifter
 Shifts all dates in a file (or directory of files) by a random or specified number of days. Useful for anonymizing time-series data or log files where exact timing is sensitive, while preserving temporal relationships. - Focused on Tools for sanitizing and obfuscating sensitive data within text files and structured data formats
 
