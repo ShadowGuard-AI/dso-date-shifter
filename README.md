@@ -16,5 +16,11 @@ Shifts all dates in a file (or directory of files) by a random or specified numb
 - `-r`: Process files in the input directory recursively.
 - `-d`: The format of the dates in the files. Defaults to %%Y-%%m-%%d
 
+## Behaviour
+- Every date shape the search pattern matches is shifted: YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY, DD-MM-YYYY, and two digit year forms such as DD/MM/YY. Each matched date is parsed with the format its own shape implies, using the `-d` format first when it fits, and is written back in the same shape. One shared shift applies to the whole run, so the spacing between dates is preserved.
+- A matched date that cannot be parsed, for example 2024-13-45, counts as a failure of the run.
+- Exit codes: the run exits 1 when any file is skipped or fails, when a matched date is left unshifted, when a run shifts zero dates, or when a directory holds no files. A run that shifts zero dates prints a plain no dates shifted line and no Processed success line. Exit 0 means at least one date was shifted and no file failed.
+- With no `-o` output path, the input files are overwritten in place, as documented above. Use `-o` to keep the originals.
+
 ## License
 Copyright (c) ShadowStrikeHQ

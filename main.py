@@ -55,6 +55,40 @@ def setup_argparse():
     return parser.parse_args()
 
 
+def candidate_formats(date_str, date_format):
+    """Formats to try for a matched date, in order.
+
+    The configured format is tried first. If it cannot parse the
+    shape that was matched, the format that shape itself implies
+    is tried next, so every shape the search pattern advertises
+    is actually shifted instead of being left in clear.
+    """
+    candidates = []
+
+    def add(fmt):
+        if fmt and fmt not in candidates:
+            candidates.append(fmt)
+
+    add(date_format)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        add("%Y-%m-%d")
+    elif re.fullmatch(r"\d{4}/\d{2}/\d{2}", date_str):
+        add("%Y/%m/%d")
+    elif re.fullmatch(r"\d{2}-\d{2}-\d{4}", date_str):
+        add("%d-%m-%Y")
+        add("%m-%d-%Y")
+    elif re.fullmatch(r"\d{2}/\d{2}/\d{4}", date_str):
+        add("%d/%m/%Y")
+        add("%m/%d/%Y")
+    elif re.fullmatch(r"\d{2}-\d{2}-\d{2}", date_str):
+        add("%d-%m-%y")
+        add("%m-%d-%y")
+    elif re.fullmatch(r"\d{2}/\d{2}/\d{2}", date_str):
+        add("%d/%m/%y")
+        add("%m/%d/%y")
+    return candidates
+
+
 def shift_date(date_str, shift_days, date_format):
     """
     Shifts a date by a specified number of days.
@@ -65,27 +99,30 @@ def shift_date(date_str, shift_days, date_format):
         date_format (str): The format of the input date string
 
     Returns:
-        str: The shifted date string.
+        str: The shifted date string in the same shape as the
+        input, or None when no candidate format can parse it.
     """
-    try:
-        date_obj = datetime.datetime.strptime(date_str, date_format)
-        shifted_date = date_obj + datetime.timedelta(days=shift_days)
-        return shifted_date.strftime(date_format)
-    except ValueError as e:
-        logging.warning(f"Invalid date format or unparsable date: {date_str}. Error: {e}")
-        return date_str  # Return original string if parsing fails
+    last_error = None
+    for fmt in candidate_formats(date_str, date_format):
+        try:
+            date_obj = datetime.datetime.strptime(date_str, fmt)
+            shifted_date = date_obj + datetime.timedelta(days=shift_days)
+            return shifted_date.strftime(fmt)
+        except ValueError as e:
+            last_error = e
+    logging.warning(f"Invalid date format or unparsable date: {date_str}. Error: {last_error}")
+    return None
 
 
 def process_file(file_path, shift_days, output_path, date_format):
     """
     Processes a single file, shifting all dates within it.
 
-    Args:
-        file_path (str): The path to the file to process.
-        shift_days (int): The number of days to shift dates by.
-        output_path (str): The path to write the processed file to.
-        date_format (str): The format of the dates in the file.
+    Returns a dict with matched, shifted, and failed counts and a
+    success flag. A file counts as successful only when at least
+    one date was shifted and no matched date was left unshifted.
     """
+    stats = {"matched": 0, "shifted": 0, "failed_dates": 0, "success": False}
     try:
         # Detect the file encoding
         with open(file_path, 'rb') as f:
@@ -94,18 +131,29 @@ def process_file(file_path, shift_days, output_path, date_format):
 
         if encoding is None:
             logging.error(f"Could not detect encoding for {file_path}. Skipping.")
-            return
+            return stats
 
         with open(file_path, 'r', encoding=encoding) as f:
             content = f.read()
 
-        # Find all dates matching the specified format and shift them in
-        # one substitution pass. The old loop replaced one date string at
-        # a time over the whole text, so a shifted date that landed on
-        # another date present in the file was shifted a second time when
-        # that date's turn came: distinct dates collapsed onto one day.
-        date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}|\d{2}[/-]\d{2}[/-]\d{4}|\d{2}[/-]\d{2}[/-]\d{2}') # Matches YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY and similar
-        shifted_content = date_pattern.sub(lambda m: shift_date(m.group(0), shift_days, date_format), content)
+        # Find all dates matching the advertised shapes and shift them
+        # in one substitution pass, using one shared shift for the run.
+        # The old loop replaced one date string at a time over the whole
+        # text, so a shifted date that landed on another date present in
+        # the file was shifted a second time when that date's turn came:
+        # distinct dates collapsed onto one day.
+        date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}|\d{4}/\d{2}/\d{2}|\d{2}[/-]\d{2}[/-]\d{4}|\d{2}[/-]\d{2}[/-]\d{2}') # Matches YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY, DD/MM/YY and similar
+
+        def _sub(match):
+            stats["matched"] += 1
+            shifted = shift_date(match.group(0), shift_days, date_format)
+            if shifted is None:
+                stats["failed_dates"] += 1
+                return match.group(0)
+            stats["shifted"] += 1
+            return shifted
+
+        shifted_content = date_pattern.sub(_sub, content)
 
         # Write the processed content to the output file
         if output_path:
@@ -118,10 +166,20 @@ def process_file(file_path, shift_days, output_path, date_format):
         with open(output_file_path, 'w', encoding=encoding) as f:
             f.write(shifted_content)
 
-        logging.info(f"Processed file: {file_path} -> {output_file_path}")
+        if stats["failed_dates"]:
+            logging.error(f"Failed to shift {stats['failed_dates']} date(s) in file: {file_path}")
+            return stats
+        if stats["shifted"] == 0:
+            logging.error(f"No dates shifted in file: {file_path}")
+            return stats
+
+        stats["success"] = True
+        logging.info(f"Processed file: {file_path} -> {output_file_path} ({stats['shifted']} date(s) shifted)")
+        return stats
 
     except Exception as e:
         logging.error(f"Error processing file {file_path}: {e}")
+        return stats
 
 
 
@@ -129,13 +187,10 @@ def process_directory(input_path, shift_days, output_path, recursive, date_forma
     """
     Processes all files in a directory, optionally recursively.
 
-    Args:
-        input_path (str): The path to the directory to process.
-        shift_days (int): The number of days to shift dates by.
-        output_path (str): The path to write the processed files to.
-        recursive (bool): Whether to process files recursively.
-        date_format (str): The format of the dates in the files.
+    Returns aggregate stats: files seen, files succeeded, files
+    failed or skipped, and total dates shifted.
     """
+    aggregate = {"files": 0, "succeeded": 0, "failed": 0, "shifted": 0}
     if output_path and not os.path.exists(output_path):
         os.makedirs(output_path)
 
@@ -150,9 +205,16 @@ def process_directory(input_path, shift_days, output_path, recursive, date_forma
             target_dir = output_path
             if output_path and root != input_path:
                 target_dir = os.path.join(output_path, os.path.relpath(root, input_path))
-            process_file(file_path, shift_days, target_dir, date_format)
+            result = process_file(file_path, shift_days, target_dir, date_format)
+            aggregate["files"] += 1
+            aggregate["shifted"] += result["shifted"]
+            if result["success"]:
+                aggregate["succeeded"] += 1
+            else:
+                aggregate["failed"] += 1
         if not recursive:
             break  # Only process the top-level directory
+    return aggregate
 
 
 def main():
@@ -179,9 +241,19 @@ def main():
         logging.info(f"Using shift of {shift_days} days.")
     
     if os.path.isfile(input_path):
-        process_file(input_path, shift_days, output_path, date_format)
+        result = process_file(input_path, shift_days, output_path, date_format)
+        if not result["success"]:
+            logging.error(f"No dates shifted, or a file was skipped or failed, for: {input_path}")
+            sys.exit(1)
     elif os.path.isdir(input_path):
-        process_directory(input_path, shift_days, output_path, recursive, date_format)
+        aggregate = process_directory(input_path, shift_days, output_path, recursive, date_format)
+        logging.info(f"Files succeeded: {aggregate['succeeded']}, files failed or skipped: {aggregate['failed']}, dates shifted: {aggregate['shifted']}")
+        if aggregate["files"] == 0:
+            logging.error(f"No files found in directory: {input_path}. No dates shifted.")
+            sys.exit(1)
+        if aggregate["failed"] or aggregate["shifted"] == 0:
+            logging.error("Run failed: a file was skipped or failed, or no dates were shifted.")
+            sys.exit(1)
     else:
         logging.error(f"Invalid input path: {input_path}. Must be a file or directory.")
         sys.exit(1)
