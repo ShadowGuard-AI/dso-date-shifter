@@ -69,6 +69,12 @@ def candidate_formats(date_str, date_format):
         if fmt and fmt not in candidates:
             candidates.append(fmt)
 
+    # Order in this list is a silent decision about ambiguous dates. For a
+    # two part shape, day first is added before month first, and the
+    # configured default (%Y-%m-%d) cannot parse such a shape at all, so a
+    # plain run reads 01/02/2023 as 1 February. When both readings parse,
+    # which is any day of 12 or under, the day first reading wins with no
+    # warning anywhere.
     add(date_format)
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
         add("%Y-%m-%d")
@@ -155,7 +161,13 @@ def process_file(file_path, shift_days, output_path, date_format):
 
         shifted_content = date_pattern.sub(_sub, content)
 
-        # Write the processed content to the output file
+        # The write happens before the success checks below, and I have
+        # run the case: a file with one good date and one impossible date
+        # is written to the output with the good date shifted and the bad
+        # one left in the clear, and only then does the run fail. In the
+        # no output mode that same order overwrites the original file on
+        # a failed run. The pattern also has no boundaries, so a date
+        # shape inside a longer digit run is matched and shifted in place.
         if output_path:
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
@@ -235,6 +247,11 @@ def main():
         sys.exit(1)
 
     if shift_days is None:
+        # One draw for the whole run, every file in a directory included,
+        # drawn from a range that contains zero: a zero draw shifts every
+        # date by nothing and each one still counts as shifted below. The
+        # draw is unseeded, so the shift a run used exists only in the log
+        # line that follows.
         shift_days = random.randint(-365, 365) # Random shift if not specified
         logging.info(f"Using random shift of {shift_days} days.")
     else:
